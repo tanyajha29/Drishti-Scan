@@ -26,6 +26,15 @@ FastAPI-based security scanning backend for Dristi-Scan.
   ```
 - Backend image exposes `8000`.
 
+## Vulnerability Rule Engine
+- Central library: `backend/rules/vulnerability_rules.json` (113 regex rules spanning Injection, Secrets exposure, Cryptography issues, File system vulnerabilities, Command execution risks, Web vulnerabilities, Authentication flaws).
+- Rule schema: `name`, `category`, `severity`, `pattern` (regex), `description`, `remediation`, optional `cwe_reference`.
+- Rules are compiled once on startup and scanned line-by-line; edit the JSON and restart the API to reload.
+- Example:
+  ```json
+  { "name": "SQL Concatenation Injection", "category": "Injection", "severity": "Critical", "pattern": "(?i)select\\s+.*from\\s+.*\\+.*", "description": "SQL built via string concatenation.", "remediation": "Use parameterized queries or ORM placeholders." }
+  ```
+
 ## Core Endpoints
 - `POST /auth/register` – body `{ "email": "...", "password": "..." }`
 - `POST /auth/login` – body `{ "email": "...", "password": "..." }`
@@ -47,4 +56,3 @@ curl -X POST http://localhost:8000/scan/code \
   -H "Content-Type: application/json" \
   -d '{"code":"import os\\nos.system(input())","file_name":"example.py"}'
 ```
-

@@ -11,6 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY rules ./rules
 
 RUN useradd -ms /bin/bash appuser
 RUN mkdir -p /app/backend/uploads && chown -R appuser:appuser /app

@@ -11,8 +11,22 @@ class RuleEngineScanner:
     """
 
     def __init__(self) -> None:
-        rules_path = Path(__file__).resolve().parents[1] / "rules" / "vulnerability_rules.json"
-        self.rules = self._load_rules(rules_path)
+        self.rules = self._load_rules(self._resolve_rules_path())
+
+    def _resolve_rules_path(self) -> Path:
+        """
+        Prefer the centralized backend/rules directory but gracefully fall back
+        to the legacy in-package rules location if needed.
+        """
+        candidates = [
+            Path(__file__).resolve().parents[2] / "rules" / "vulnerability_rules.json",
+            Path(__file__).resolve().parents[1] / "rules" / "vulnerability_rules.json",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        # If nothing exists, return the primary expected path so the loader raises a clear error.
+        return candidates[0]
 
     def _load_rules(self, path: Path) -> List[Dict[str, Any]]:
         if not path.exists():
