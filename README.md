@@ -45,6 +45,13 @@ docker-compose up --build
 ```
 If using WSL2 + Docker, set `VITE_API_BASE_URL=http://<wsl-ip>:8000` and open `http://<wsl-ip>:5173`.
 
+## UI Preview
+![Dashboard](docs/screens/ui-screen-1.png)
+![Scan Workspace](docs/screens/ui-screen-2.png)
+![Scan Progress](docs/screens/ui-screen-3.png)
+![Results & Filters](docs/screens/ui-screen-4.png)
+![Reports Download](docs/screens/ui-screen-5.png)
+
 ## Backend: Local (without Compose)
 ```bash
 cd backend
