@@ -11,6 +11,11 @@ class CodeScanRequest(BaseModel):
     file_name: Optional[str] = Field(default="pasted_code.py")
 
 
+class RepoScanRequest(BaseModel):
+    repo_url: str = Field(..., description="GitHub repository URL")
+    branch: Optional[str] = Field(default=None, description="Optional branch name (defaults to default branch)")
+
+
 class DependencyInfo(BaseModel):
     package: str
     version: str | None = None

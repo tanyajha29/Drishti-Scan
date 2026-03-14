@@ -44,8 +44,23 @@ export const ScanProvider = ({ children }) => {
     }
   };
 
+  const runRepoScan = async (repo_url, branch = null) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await api.post('/scan/repo', { repo_url, branch });
+      setLastResult(data);
+      return data;
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Repository scan failed');
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <ScanContext.Provider value={{ lastResult, loading, error, runCodeScan, runUploadScan }}>
+    <ScanContext.Provider value={{ lastResult, loading, error, runCodeScan, runUploadScan, runRepoScan }}>
       {children}
     </ScanContext.Provider>
   );

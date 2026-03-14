@@ -6,8 +6,9 @@ from ..database import get_db
 from ..middleware.auth_middleware import get_current_user
 from ..models.scan_model import Scan
 from ..models.vulnerability_model import Vulnerability
-from ..schemas.scan_schema import CodeScanRequest, ScanResult, VulnerabilityOut
-from ..services.scan_service import run_scan
+from ..schemas.scan_schema import CodeScanRequest, RepoScanRequest, ScanResult, VulnerabilityOut
+from ..services.scan_service import run_scan, _rule_engine
+from ..services.github_service import fetch_repository_sources
 from ..services.risk_engine import risk_level
 from ..utils.file_handler import save_code_as_file, save_upload_file, cleanup_file
 
@@ -52,19 +53,7 @@ def _persist_scan(db: Session, user_id: int, scan_result: dict) -> Scan:
     return scan
 
 
-@router.post("/code", response_model=ScanResult)
-def scan_code(
-    payload: CodeScanRequest,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    logger.info("Scan request (code) by user=%s for file=%s", current_user.id, payload.file_name)
-    file_path = save_code_as_file(payload.code, payload.file_name or "pasted_code.py")
-    scan_result = run_scan(file_path.name, payload.code)
-    scan = _persist_scan(db, current_user.id, scan_result)
-    background_tasks.add_task(cleanup_file, file_path)
-
+def _build_response(scan: Scan, scan_result: dict) -> ScanResult:
     return ScanResult(
         scan_id=scan.id,
         file_name=scan_result["file_name"],
@@ -82,6 +71,22 @@ def scan_code(
         summary=scan_result["summary"],
         vulnerabilities=[VulnerabilityOut.from_orm(v) for v in scan.vulnerabilities],
     )
+
+
+@router.post("/code", response_model=ScanResult)
+def scan_code(
+    payload: CodeScanRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    logger.info("Scan request (code) by user=%s for file=%s", current_user.id, payload.file_name)
+    file_path = save_code_as_file(payload.code, payload.file_name or "pasted_code.py")
+    scan_result = run_scan(file_path.name, payload.code)
+    scan = _persist_scan(db, current_user.id, scan_result)
+    background_tasks.add_task(cleanup_file, file_path)
+
+    return _build_response(scan, scan_result)
 
 
 @router.post("/upload", response_model=ScanResult)
@@ -103,20 +108,53 @@ def scan_upload(
     scan = _persist_scan(db, current_user.id, scan_result)
     background_tasks.add_task(cleanup_file, file_path)
 
-    return ScanResult(
-        scan_id=scan.id,
-        file_name=scan_result["file_name"],
-        risk_score=scan_result["risk_score"],
-        security_score=scan_result["security_score"],
-        total_findings=scan_result["total_findings"],
-        total_issues=scan_result["total_findings"],
-        critical_count=scan_result["critical_count"],
-        high_count=scan_result["high_count"],
-        medium_count=scan_result["medium_count"],
-        low_count=scan_result["low_count"],
-        risk_level=risk_level(scan_result["risk_score"]),
-        scan_engine=scan_result["scan_engine"],
-        rules_applied=scan_result["rules_applied"],
-        summary=scan_result["summary"],
-        vulnerabilities=[VulnerabilityOut.from_orm(v) for v in scan.vulnerabilities],
-    )
+    return _build_response(scan, scan_result)
+
+
+@router.post("/repo", response_model=ScanResult)
+async def scan_repository(
+    payload: RepoScanRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    logger.info("Repository scan requested by user=%s for repo=%s", current_user.id, payload.repo_url)
+    try:
+        files = await fetch_repository_sources(payload.repo_url)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    all_findings = []
+    for path, content in files:
+        result = run_scan(path, content)
+        all_findings.extend(result["vulnerabilities"])
+
+    from ..services.risk_engine import calculate_risk_score
+    from collections import Counter
+
+    counts = Counter(v["severity"] for v in all_findings)
+    total = len(all_findings)
+    risk = int(round(calculate_risk_score([v["severity"] for v in all_findings])) if all_findings else 0)
+    aggregated = {
+        "file_name": payload.repo_url,
+        "vulnerabilities": all_findings,
+        "total_findings": total,
+        "critical_count": counts.get("Critical", 0),
+        "high_count": counts.get("High", 0),
+        "medium_count": counts.get("Medium", 0),
+        "low_count": counts.get("Low", 0),
+        "risk_score": risk,
+        "security_score": max(0, 100 - risk),
+        "scan_engine": "DristiScan Orchestrator v2 (repo)",
+        "rules_applied": len(getattr(_rule_engine, "rules", [])),
+        "summary": {
+            "total": total,
+            "critical": counts.get("Critical", 0),
+            "high": counts.get("High", 0),
+            "medium": counts.get("Medium", 0),
+            "low": counts.get("Low", 0),
+            "risk_score": risk,
+            "security_score": max(0, 100 - risk),
+        },
+    }
+    scan = _persist_scan(db, current_user.id, aggregated)
+    return _build_response(scan, aggregated)

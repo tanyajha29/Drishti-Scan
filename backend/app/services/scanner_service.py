@@ -2,25 +2,11 @@ from collections import Counter
 from pathlib import Path
 from typing import List, Dict, Any
 
-from ..scanners.sast_scanner import scan_code as sast_scan
-from ..scanners.secret_scanner import scan_for_secrets
-from ..scanners.dependency_scanner import scan_dependencies
+from ..scanner.orchestrator import run_pipeline_sync
 from ..scanner.rule_engine import RuleEngineScanner
 from .risk_engine import calculate_risk_score
 
 _rule_engine = RuleEngineScanner()
-
-
-def run_scanners(file_name: str, content: str) -> List[Dict[str, Any]]:
-    """
-    Run custom rule engine plus SAST, secret, and dependency scanners.
-    """
-    vulnerabilities: List[Dict[str, Any]] = []
-    vulnerabilities.extend(_rule_engine.scan(content, file_name))
-    vulnerabilities.extend(sast_scan(content, file_name))
-    vulnerabilities.extend(scan_for_secrets(content, file_name))
-    vulnerabilities.extend(scan_dependencies(file_name, content))
-    return vulnerabilities
 
 
 def normalize_vulnerability(vuln: Dict[str, Any]) -> Dict[str, Any]:
@@ -33,7 +19,8 @@ def normalize_vulnerability(vuln: Dict[str, Any]) -> Dict[str, Any]:
         "category": vuln.get("category"),
     }
     normalized = {**defaults, **vuln}
-    normalized["file_name"] = Path(vuln.get("file_name", "unknown.txt")).name
+    normalized["file_name"] = Path(vuln.get("file_name", "unknown.txt")).as_posix()
+    normalized["severity"] = normalized.get("severity", "Medium")
     return normalized
 
 
@@ -54,7 +41,7 @@ def _summarize(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def run_scan(file_name: str, content: str) -> Dict[str, Any]:
-    raw_findings = run_scanners(file_name, content)
+    raw_findings = run_pipeline_sync(file_name, content)
     findings = [normalize_vulnerability(v) for v in raw_findings]
     summary = _summarize(findings)
     summary_payload = {
@@ -68,10 +55,10 @@ def run_scan(file_name: str, content: str) -> Dict[str, Any]:
     }
 
     return {
-        "file_name": Path(file_name).name,
+        "file_name": Path(file_name).as_posix(),
         "vulnerabilities": findings,
         **summary,
-        "scan_engine": "DristiScan Rule Engine v1",
+        "scan_engine": "DristiScan Orchestrator v2",
         "rules_applied": len(_rule_engine.rules),
         "summary": summary_payload,
     }

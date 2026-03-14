@@ -12,7 +12,8 @@ const Scan = () => {
   const [language, setLanguage] = useState('python');
   const [progress, setProgress] = useState(0);
   const [localError, setLocalError] = useState(null);
-  const { runCodeScan, runUploadScan, loading } = useScan();
+  const [repoUrl, setRepoUrl] = useState('');
+  const { runCodeScan, runUploadScan, runRepoScan, loading } = useScan();
   const navigate = useNavigate();
 
   const findings = [
@@ -51,6 +52,23 @@ const Scan = () => {
     }
   };
 
+  const handleRepoScan = async () => {
+    if (!repoUrl) {
+      setLocalError('Enter a GitHub repository URL.');
+      return;
+    }
+    setLocalError(null);
+    setProgress(10);
+    try {
+      await runRepoScan(repoUrl);
+      setProgress(100);
+      navigate('/results');
+    } catch (e) {
+      setLocalError('Repository scan failed.');
+      setProgress(0);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -85,6 +103,26 @@ const Scan = () => {
           <p className="text-xs text-slate-500 mt-2">Background tasks running SAST + Secrets + Dependency checks.</p>
           {localError && <p className="text-xs text-critical mt-2">{localError}</p>}
         </GlassCard>
+
+        <GlassCard className="p-4 space-y-3">
+          <p className="text-sm text-slate-400">Scan GitHub Repository</p>
+          <input
+            type="url"
+            placeholder="https://github.com/user/repo"
+            className="w-full bg-surface border border-border rounded-xl px-3 py-2 text-sm text-white placeholder:text-slate-500"
+            value={repoUrl}
+            onChange={(e) => setRepoUrl(e.target.value)}
+          />
+          <button
+            onClick={handleRepoScan}
+            className="w-full px-4 py-2 rounded-xl bg-gradient-to-r from-cyber to-accent text-white shadow-glow text-sm"
+            disabled={loading}
+          >
+            {loading ? 'Scanning…' : 'Scan Repository'}
+          </button>
+          <p className="text-xs text-slate-500">Uses GitHub API + AI analysis; supported languages: Python, JS/TS, Java, Go, PHP, Ruby, C/C++.</p>
+        </GlassCard>
+
         <GlassCard className="p-4 space-y-2">
           <p className="text-sm text-slate-400">Recent Findings</p>
           {findings.map((f, idx) => (

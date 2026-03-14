@@ -9,15 +9,32 @@ class Settings(BaseSettings):
     environment: str = Field(default="development")
     database_url: str = Field(default="postgresql://admin:adminpassword@localhost:5432/drishtiscan")
     secret_key: str = Field(default="change-me")
+    jwt_secret_key: str | None = Field(default=None, description="Optional alias for SECRET_KEY")
     algorithm: str = Field(default="HS256")
     access_token_expire_minutes: int = Field(default=60)
     upload_dir: str = Field(default=os.path.join(os.getcwd(), "backend", "uploads"))
     max_upload_size_mb: int = Field(default=5)
     allowed_file_types: set[str] = Field(
-        default_factory=lambda: {".py", ".js", ".java", ".php", ".txt", ".json", ".lock", ".md"}
+        default_factory=lambda: {
+            ".py",
+            ".js",
+            ".ts",
+            ".java",
+            ".php",
+            ".go",
+            ".rb",
+            ".c",
+            ".cpp",
+            ".txt",
+            ".json",
+            ".lock",
+            ".md",
+        }
     )
     cors_origins: list[str | AnyHttpUrl] = Field(default_factory=lambda: ["*"])
     log_level: str = Field(default="INFO")
+    github_token: str | None = Field(default=None, description="GitHub token for repository scanning")
+    ollama_url: AnyHttpUrl | str = Field(default="http://localhost:11434", description="Ollama base URL")
 
     class Config:
         env_file = ".env"
@@ -26,4 +43,8 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # allow JWT_SECRET_KEY alias
+    if settings.jwt_secret_key and settings.secret_key == "change-me":
+        settings.secret_key = settings.jwt_secret_key
+    return settings

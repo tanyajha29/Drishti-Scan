@@ -123,6 +123,30 @@ def _exec_summary(report: Report, styles):
     return [Paragraph("Executive Summary", styles["Heading"]), table, Spacer(1, 8), badge, Spacer(1, 12)]
 
 
+def _scan_information(report: Report, styles):
+    info = [
+        ["File / Target", report.file_name],
+        ["Scan ID", str(report.scan_id)],
+        ["Scan Date", report.scan_date.strftime("%Y-%m-%d %H:%M")],
+        ["Engine", "DristiScan Orchestrator v2"],
+    ]
+    table = Table(
+        info,
+        colWidths=[2.0 * inch, 4.0 * inch],
+        style=[
+            ("TEXTCOLOR", (0, 0), (-1, -1), TEXT),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.Color(1, 1, 1, alpha=0.02)),
+            ("BOX", (0, 0), (-1, -1), 0.25, colors.Color(1, 1, 1, alpha=0.1)),
+            ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.Color(1, 1, 1, alpha=0.1)),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ],
+    )
+    return [Paragraph("Scan Information", styles["Heading"]), table, Spacer(1, 10)]
+
+
 def _findings_section(report: Report, styles):
     story = [Paragraph("Vulnerability Findings", styles["Heading"])]
     for vuln in report.vulnerabilities:
@@ -195,6 +219,7 @@ def get_report_pdf(db: Session, scan_id: int) -> bytes:
     story.append(PageBreak())
 
     story.extend(_exec_summary(report, styles))
+    story.extend(_scan_information(report, styles))
     story.extend(_findings_section(report, styles))
     story.append(PageBreak())
     story.extend(_remediation_summary(report, styles))
