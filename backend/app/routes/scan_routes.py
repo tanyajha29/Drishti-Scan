@@ -1,5 +1,6 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, BackgroundTasks, status
+import anyio
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -125,7 +126,8 @@ async def scan_repository(
 
     all_findings = []
     for path, content in files:
-        result = run_scan(path, content)
+        # run potentially blocking scan in thread to avoid nested event loop issues
+        result = await anyio.to_thread.run_sync(run_scan, path, content)
         all_findings.extend(result["vulnerabilities"])
 
     from ..services.risk_engine import calculate_risk_score
