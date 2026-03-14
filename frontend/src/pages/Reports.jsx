@@ -1,18 +1,38 @@
 import React, { useEffect, useState } from 'react';
 import GlassCard from '../components/GlassCard.jsx';
-import SeverityBadge from '../components/SeverityBadge.jsx';
 import api from '../lib/api.js';
+import ReportsList from '../components/ReportsList.jsx';
 
 const Reports = () => {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     api
       .get('/api/reports/history')
       .then((res) => setRows(res.data.reports || []))
+      .catch((err) => setError(err?.response?.data?.detail || 'Failed to load reports'))
       .finally(() => setLoading(false));
   }, []);
+
+  const handleDownload = async (scanId, fileName) => {
+    try {
+      const res = await api.get(`/api/reports/${scanId}/pdf`, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `DristiScan_Report_${fileName || 'scan'}_${stamp}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Failed to download PDF');
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -24,36 +44,13 @@ const Reports = () => {
         </div>
       </div>
 
-      <GlassCard className="p-4 overflow-auto">
-        {loading ? (
-          <p className="text-slate-300">Loading…</p>
-        ) : (
-          <table className="w-full text-sm text-left">
-            <thead className="text-slate-400">
-              <tr className="border-b border-border">
-                <th className="py-3">Scan ID</th>
-                <th>File</th>
-                <th>Date</th>
-                <th>Score</th>
-                <th>Issues</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border text-slate-200">
-              {rows.map((row) => (
-                <tr key={row.scan_id}>
-                  <td className="py-3">{row.scan_id}</td>
-                  <td>{row.file_name}</td>
-                  <td>{new Date(row.scan_date).toLocaleString()}</td>
-                  <td className="text-accent font-semibold">{row.risk_score}</td>
-                  <td>{row.total_vulnerabilities}</td>
-                  <td><SeverityBadge level={row.risk_level?.includes('High') ? 'High' : 'Low'} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </GlassCard>
+      {error && <GlassCard className="p-3 text-sm text-red-400 border-red-500/40 bg-red-500/10">{error}</GlassCard>}
+
+      {loading ? (
+        <GlassCard className="p-4 text-slate-300">Loading…</GlassCard>
+      ) : (
+        <ReportsList reports={rows} onDownload={handleDownload} />
+      )}
     </div>
   );
 };
