@@ -2,12 +2,12 @@ services:
   - type: web
     name: drishti-scan-api
     runtime: python
-    plan: free
+    plan: starter
     region: oregon
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    healthCheckPath: /health/live
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
@@ -31,6 +31,8 @@ services:
         value: INFO
       - key: CORS_ORIGINS
         sync: false
+      - key: CORS_ORIGIN_REGEX
+        value: ^https://.*\.vercel\.app$
       - key: ALLOW_CREDENTIALS
         value: "false"
       - key: FERNET_KEY
@@ -38,13 +40,25 @@ services:
       - key: GITHUB_TOKEN
         sync: false
       - key: LLM_PROVIDER
-        value: openrouter
+        value: bedrock
       - key: LLM_MODEL
         value: openrouter/auto
       - key: LLM_TIMEOUT_SECONDS
         value: "120"
       - key: LLM_TEMPERATURE
         value: "0"
+      - key: BEDROCK_REGION
+        value: us-east-1
+      - key: BEDROCK_MODEL_ID
+        sync: false
+      - key: BEDROCK_FALLBACK_TO_OPENROUTER
+        value: "true"
+      - key: BEDROCK_AWS_ACCESS_KEY_ID
+        sync: false
+      - key: BEDROCK_AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: BEDROCK_AWS_SESSION_TOKEN
+        sync: false
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_BASE_URL
@@ -62,7 +76,7 @@ services:
       - key: RAG_DEBUG
         value: "false"
       - key: PREWARM_EMBEDDINGS_ON_STARTUP
-        value: "true"
+        value: "false"
       - key: HF_HOME
         value: /opt/render/.cache/huggingface
       - key: SENTENCE_TRANSFORMERS_HOME
@@ -84,6 +98,6 @@ services:
 
 databases:
   - name: drishti-scan-db
-    plan: free
+    plan: basic-256mb
     region: oregon
     databaseName: drishtiscan

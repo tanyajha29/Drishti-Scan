@@ -24,6 +24,7 @@ app = FastAPI(title=settings.project_name, version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=settings.allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,18 +34,19 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(bind=engine)
-    # Safe migration: add is_active column if it doesn't exist yet (idempotent)
     try:
+        Base.metadata.create_all(bind=engine)
+        # Safe migration: add is_active column if it doesn't exist yet (idempotent)
         from sqlalchemy import text
+
         with engine.connect() as conn:
             conn.execute(text(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"
             ))
             conn.commit()
+        logger.info("Database tables ensured")
     except Exception as exc:
-        logger.warning("is_active migration skipped (may already exist): %s", exc)
-    logger.info("Database tables ensured")
+        logger.error("Database initialization failed; readiness checks will report unhealthy: %s", exc)
     if settings.prewarm_embeddings_on_startup:
         try:
             from .rag.retriever_service import warmup_embeddings
@@ -80,6 +82,26 @@ app.include_router(report_routes.router, prefix="/api", dependencies=[Depends(ra
 app.include_router(rag_routes.router, dependencies=[Depends(rate_limiter)])
 
 
+@app.get("/health/live", tags=["meta"])
+def health_live():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", tags=["meta"])
+def health_ready():
+    try:
+        from sqlalchemy import text
+
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "ok"}
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "database": "unavailable", "detail": str(exc)},
+        )
+
+
 @app.get("/health", tags=["meta"])
 def health():
-    return {"status": "ok"}
+    return health_live()

@@ -17,9 +17,9 @@ DEFAULT_PROVIDER = "openrouter"
 DEFAULT_MODEL = "openrouter/auto"
 DEFAULT_TIMEOUT_SECONDS = 120
 DEFAULT_TEMPERATURE = 0
+DEFAULT_BEDROCK_REGION = "us-east-1"
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_ENDPOINT = f"{OPENROUTER_BASE_URL}/chat/completions"
 
 STRICT_JSON_SYSTEM_PROMPT = (
     "You are a security analysis assistant for DristiScan. "
@@ -32,13 +32,25 @@ STRICT_JSON_SYSTEM_PROMPT = (
 )
 
 
+def _env_str(name: str, default: str = "") -> str:
+    value = os.getenv(name, default)
+    return value.strip() if isinstance(value, str) else default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = _env_str(name, "")
+    if not value:
+        return default
+    return value.lower() in ("1", "true", "yes", "on")
+
+
 def _resolve_model() -> str:
-    return (os.getenv("LLM_MODEL") or os.getenv("OLLAMA_MODEL") or DEFAULT_MODEL).strip()
+    return (_env_str("LLM_MODEL") or _env_str("OLLAMA_MODEL") or DEFAULT_MODEL).strip()
 
 
 def _resolve_timeout() -> float:
     for key in ("LLM_TIMEOUT_SECONDS", "OLLAMA_TIMEOUT_SECONDS"):
-        val = os.getenv(key)
+        val = _env_str(key)
         if val:
             try:
                 return float(val)
@@ -49,13 +61,13 @@ def _resolve_timeout() -> float:
 
 def _resolve_temperature() -> float:
     try:
-        return float(os.getenv("LLM_TEMPERATURE", DEFAULT_TEMPERATURE))
+        return float(_env_str("LLM_TEMPERATURE", str(DEFAULT_TEMPERATURE)))
     except ValueError:
         return float(DEFAULT_TEMPERATURE)
 
 
 def _resolve_max_tokens() -> Optional[int]:
-    val = os.getenv("LLM_MAX_TOKENS")
+    val = _env_str("LLM_MAX_TOKENS")
     if not val:
         return None
     try:
@@ -67,7 +79,9 @@ def _resolve_max_tokens() -> Optional[int]:
 
 class BaseAgent:
     """
-    LLM caller that routes to OpenRouter (default) or Ollama (legacy fallback).
+    LLM caller that routes to Bedrock, OpenRouter, or Ollama.
+    When LLM_PROVIDER=bedrock, Bedrock is tried first and OpenRouter is used
+    automatically as a production-safe fallback on any Bedrock failure.
     """
 
     def __init__(
@@ -86,21 +100,37 @@ class BaseAgent:
         self.timeout = timeout_seconds or _resolve_timeout()
         self.temperature = _resolve_temperature() if temperature is None else float(temperature)
         self.max_tokens = _resolve_max_tokens() if max_tokens is None else max_tokens
-        self._debug = os.getenv("RAG_DEBUG", "false").lower() in ("1", "true", "yes")
+        self._debug = _env_bool("RAG_DEBUG", False)
 
-        self._provider = os.getenv("LLM_PROVIDER", DEFAULT_PROVIDER).lower().strip()
-        self._api_key = os.getenv("OPENROUTER_API_KEY", "")
-        self._site_url = os.getenv("OPENROUTER_SITE_URL", "http://localhost:5173")
-        self._site_name = os.getenv("OPENROUTER_SITE_NAME", "DristiScan")
+        self._provider = _env_str("LLM_PROVIDER", DEFAULT_PROVIDER).lower() or DEFAULT_PROVIDER
 
-        raw_ollama = url or os.getenv("OLLAMA_URL") or "http://localhost:11434"
+        self._api_key = _env_str("OPENROUTER_API_KEY")
+        self._openrouter_base_url = _env_str("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL).rstrip("/") or OPENROUTER_BASE_URL
+        self._openrouter_endpoint = f"{self._openrouter_base_url}/chat/completions"
+        self._site_url = _env_str("OPENROUTER_SITE_URL", "http://localhost:5173")
+        self._site_name = _env_str("OPENROUTER_SITE_NAME", "DristiScan")
+
+        self._bedrock_model_id = _env_str("BEDROCK_MODEL_ID")
+        self._bedrock_region = (
+            _env_str("BEDROCK_REGION")
+            or _env_str("AWS_REGION")
+            or _env_str("AWS_DEFAULT_REGION")
+            or DEFAULT_BEDROCK_REGION
+        )
+        self._bedrock_fallback_to_openrouter = _env_bool("BEDROCK_FALLBACK_TO_OPENROUTER", True)
+        self._bedrock_access_key_id = _env_str("BEDROCK_AWS_ACCESS_KEY_ID")
+        self._bedrock_secret_access_key = _env_str("BEDROCK_AWS_SECRET_ACCESS_KEY")
+        self._bedrock_session_token = _env_str("BEDROCK_AWS_SESSION_TOKEN")
+
+        raw_ollama = url or _env_str("OLLAMA_URL", "http://localhost:11434")
         self._ollama_url = self._normalize_ollama_url(raw_ollama)
 
         logger.info(
-            "[%s] Initialized - provider=%s model=%s timeout=%ss max_tokens=%s",
+            "[%s] Initialized - provider=%s openrouter_model=%s bedrock_model=%s timeout=%ss max_tokens=%s",
             self.name,
             self._provider,
             self.model,
+            self._bedrock_model_id or "(unset)",
             self.timeout,
             self.max_tokens,
         )
@@ -108,7 +138,88 @@ class BaseAgent:
     def send_prompt(self, prompt: str) -> str:
         if self._provider == "ollama":
             return self._send_ollama(prompt)
+        if self._provider == "bedrock":
+            result = self._send_bedrock(prompt)
+            if result:
+                return result
+            if self._bedrock_fallback_to_openrouter:
+                logger.warning("[%s] Bedrock failed; falling back to OpenRouter", self.name)
+                return self._send_openrouter(prompt)
+            return ""
         return self._send_openrouter(prompt)
+
+    def _build_system_content(self) -> str:
+        if self.system_instructions:
+            return f"{STRICT_JSON_SYSTEM_PROMPT}\n\n{self.system_instructions}"
+        return STRICT_JSON_SYSTEM_PROMPT
+
+    def _send_bedrock(self, prompt: str) -> str:
+        if not self._bedrock_model_id:
+            logger.error("[%s] BEDROCK_MODEL_ID is not set", self.name)
+            return ""
+
+        client_kwargs: dict[str, Any] = {"service_name": "bedrock-runtime", "region_name": self._bedrock_region}
+        if self._bedrock_access_key_id and self._bedrock_secret_access_key:
+            client_kwargs["aws_access_key_id"] = self._bedrock_access_key_id
+            client_kwargs["aws_secret_access_key"] = self._bedrock_secret_access_key
+            if self._bedrock_session_token:
+                client_kwargs["aws_session_token"] = self._bedrock_session_token
+
+        if self._debug:
+            logger.debug(
+                "[%s] Bedrock request model=%s region=%s prompt_len=%d",
+                self.name,
+                self._bedrock_model_id,
+                self._bedrock_region,
+                len(prompt),
+            )
+        else:
+            logger.info(
+                "[%s] Calling Bedrock model=%s region=%s timeout=%ss",
+                self.name,
+                self._bedrock_model_id,
+                self._bedrock_region,
+                self.timeout,
+            )
+
+        try:
+            import boto3  # type: ignore
+
+            client = boto3.client(**client_kwargs)
+            inference_config: dict[str, Any] = {"temperature": self.temperature}
+            if self.max_tokens is not None:
+                inference_config["maxTokens"] = int(self.max_tokens)
+
+            response = client.converse(
+                modelId=self._bedrock_model_id,
+                system=[{"text": self._build_system_content()}],
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig=inference_config,
+            )
+        except Exception as exc:
+            logger.error("[%s] Bedrock request failed: %s", self.name, exc)
+            return ""
+
+        try:
+            blocks = response["output"]["message"]["content"]
+            content = "".join(
+                block.get("text", "")
+                for block in blocks
+                if isinstance(block, dict) and isinstance(block.get("text"), str)
+            ).strip()
+        except Exception as exc:
+            logger.warning("[%s] Unexpected Bedrock response shape: %s", self.name, exc)
+            return ""
+
+        if not content:
+            logger.warning("[%s] Bedrock returned empty content", self.name)
+            return ""
+
+        if self._debug:
+            logger.debug("[%s] Bedrock response_len=%d", self.name, len(content))
+        else:
+            logger.info("[%s] Bedrock responded (%d chars)", self.name, len(content))
+        return content
 
     def _send_openrouter(self, prompt: str) -> str:
         if not self._api_key:
@@ -118,14 +229,10 @@ class BaseAgent:
             )
             return ""
 
-        system_content = STRICT_JSON_SYSTEM_PROMPT
-        if self.system_instructions:
-            system_content = f"{STRICT_JSON_SYSTEM_PROMPT}\n\n{self.system_instructions}"
-
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_content},
+                {"role": "system", "content": self._build_system_content()},
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
@@ -145,7 +252,7 @@ class BaseAgent:
                 "[%s] OpenRouter request model=%s url=%s prompt_len=%d",
                 self.name,
                 self.model,
-                OPENROUTER_ENDPOINT,
+                self._openrouter_endpoint,
                 len(prompt),
             )
         else:
@@ -153,7 +260,7 @@ class BaseAgent:
 
         try:
             resp = _HTTP_SESSION.post(
-                OPENROUTER_ENDPOINT,
+                self._openrouter_endpoint,
                 json=payload,
                 headers=headers,
                 timeout=self.timeout,
