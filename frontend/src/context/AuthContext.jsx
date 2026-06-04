@@ -9,6 +9,7 @@ export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [token, setToken] = useState(localStorage.getItem('token') || null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
     const applyToken = (value) => {
         setToken(value);
@@ -26,7 +27,9 @@ export const AuthProvider = ({ children }) => {
             api
                 .get('/auth/profile')
                 .then((res) => setUser(res.data))
-                .catch(() => {
+                .catch((err) => {
+                    console.error('[v0] Auth profile fetch failed:', err.message);
+                    setError(err.message);
                     setToken(null);
                     setUser(null);
                 })
@@ -121,6 +124,7 @@ export const AuthProvider = ({ children }) => {
         verifyRegistration,
         logout,
         loading,
+        error,
         verifyLoginMfa,
         startMfaSetup,
         verifyMfa,
@@ -128,5 +132,5 @@ export const AuthProvider = ({ children }) => {
         fetchProfile
     };
 
-    return <AuthContext.Provider value={value}>{!loading && children}</AuthContext.Provider>;
+    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
